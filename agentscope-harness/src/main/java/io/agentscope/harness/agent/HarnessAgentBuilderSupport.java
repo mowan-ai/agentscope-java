@@ -190,10 +190,12 @@ final class HarnessAgentBuilderSupport {
             HarnessAgent.Builder b, Path resolvedWorkspace, SandboxBackedFilesystem sandboxFs) {
         List<SubagentDeclaration> allDeclarations = new ArrayList<>(b.subagentDeclarations);
 
-        Path subagentsDir = resolvedWorkspace.resolve("subagents");
-        if (Files.isDirectory(subagentsDir)) {
-            allDeclarations.addAll(
-                    AgentSpecLoader.loadFromDirectory(subagentsDir, resolvedWorkspace));
+        if (!b.disableWorkspaceSubagents) {
+            Path subagentsDir = resolvedWorkspace.resolve("subagents");
+            if (Files.isDirectory(subagentsDir)) {
+                allDeclarations.addAll(
+                        AgentSpecLoader.loadFromDirectory(subagentsDir, resolvedWorkspace));
+            }
         }
 
         List<SubagentEntry> entries = new ArrayList<>();
@@ -298,6 +300,7 @@ final class HarnessAgentBuilderSupport {
         final boolean capturedDisableShellTool = b.disableShellTool;
         final boolean capturedDisableMemoryTools = b.disableMemoryTools;
         final boolean capturedDisableMemoryHooks = b.disableMemoryHooks;
+        final boolean capturedDisableSubagentMemoryHooks = b.disableSubagentMemoryHooks;
         final boolean capturedDisableSessionPersistence = b.disableSessionPersistence;
         final boolean capturedDisableWorkspaceContext = b.disableWorkspaceContext;
         final boolean capturedPlanModeEnabled = b.planModeEnabled;
@@ -341,7 +344,9 @@ final class HarnessAgentBuilderSupport {
             if (capturedDisableFilesystemTools) sub.disableFilesystemTools();
             if (capturedDisableShellTool) sub.disableShellTool();
             if (capturedDisableMemoryTools) sub.disableMemoryTools();
-            if (capturedDisableMemoryHooks) sub.disableMemoryHooks();
+            if (capturedDisableMemoryHooks || capturedDisableSubagentMemoryHooks) {
+                sub.disableMemoryHooks();
+            }
             if (capturedDisableSessionPersistence) sub.disableSessionPersistence();
             if (capturedDisableWorkspaceContext) sub.disableWorkspaceContext();
             configurePlanMode(
@@ -394,6 +399,7 @@ final class HarnessAgentBuilderSupport {
         final boolean capturedDisableShellTool = b.disableShellTool;
         final boolean capturedDisableMemoryTools = b.disableMemoryTools;
         final boolean capturedDisableMemoryHooks = b.disableMemoryHooks;
+        final boolean capturedDisableSubagentMemoryHooks = b.disableSubagentMemoryHooks;
         final boolean capturedDisableSessionPersistence = b.disableSessionPersistence;
         final boolean capturedPlanModeEnabled = b.planModeEnabled;
         final boolean capturedPlanModeAllowShell = b.planModeAllowShell;
@@ -487,7 +493,9 @@ final class HarnessAgentBuilderSupport {
             if (capturedDisableFilesystemTools) sub.disableFilesystemTools();
             if (capturedDisableShellTool) sub.disableShellTool();
             if (capturedDisableMemoryTools) sub.disableMemoryTools();
-            if (capturedDisableMemoryHooks) sub.disableMemoryHooks();
+            if (capturedDisableMemoryHooks || capturedDisableSubagentMemoryHooks) {
+                sub.disableMemoryHooks();
+            }
             if (capturedDisableSessionPersistence) sub.disableSessionPersistence();
             configurePlanMode(
                     sub, capturedPlanModeEnabled, capturedPlanModeAllowShell, capturedPlanFileDir);
@@ -706,11 +714,18 @@ final class HarnessAgentBuilderSupport {
             WorkspaceManager wsManager,
             Path workspace,
             SandboxBackedFilesystem sandboxFs) {
-        List<SubagentEntry> entries = buildSubagentEntries(b, workspace, sandboxFs);
+        List<SubagentEntry> entries =
+                b.disableWorkspaceSubagents
+                        ? buildStaticSubagentEntries(b, workspace, sandboxFs)
+                        : buildSubagentEntries(b, workspace, sandboxFs);
         TaskRepository repo = resolveTaskRepository(b, wsManager);
 
         if (b.externalSubagentTool != null) {
             return new SubagentsMiddleware(entries, b.externalSubagentTool, repo);
+        }
+
+        if (b.disableWorkspaceSubagents) {
+            return new SubagentsMiddleware(entries, repo, wsManager);
         }
 
         AbstractFilesystem fs = wsManager.getFilesystem();

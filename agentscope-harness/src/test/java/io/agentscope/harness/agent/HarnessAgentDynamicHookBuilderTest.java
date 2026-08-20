@@ -412,6 +412,33 @@ class HarnessAgentDynamicHookBuilderTest {
                 "Static SubagentsMiddleware must be registered when dynamic is disabled");
     }
 
+    @Test
+    void disableWorkspaceSubagents_doesNotLoadMarkdownDeclarations() throws Exception {
+        Path subagentsDirectory = Files.createDirectories(workspace.resolve("subagents"));
+        Files.writeString(
+                subagentsDirectory.resolve("runtime-worker.md"),
+                "---\nname: runtime-worker\ndescription: runtime worker\n---\nRuntime worker.");
+        HarnessAgent agent =
+                HarnessAgent.builder()
+                        .name("t")
+                        .model(stubModel("ok"))
+                        .workspace(workspace)
+                        .abstractFilesystem(new LocalFilesystem(workspace))
+                        .disableWorkspaceSubagents()
+                        .build();
+
+        List<MiddlewareBase> mws = agent.getDelegate().getMiddlewares();
+        assertFalse(
+                anyOfType(mws, DynamicSubagentsMiddleware.class),
+                "workspace subagent loading must not install dynamic middleware");
+        assertTrue(
+                anyOfType(mws, SubagentsMiddleware.class),
+                "programmatic subagents must remain available through static middleware");
+        assertFalse(
+                agent.getSubagentAgentManager().hasAgent("runtime-worker"),
+                "disableWorkspaceSubagents() must not load workspace/subagents/*.md");
+    }
+
     private static io.agentscope.harness.agent.middleware.HarnessSkillMiddleware
             frozenSkillMiddleware(HarnessAgent agent) {
         return agent.getDelegate().getMiddlewares().stream()

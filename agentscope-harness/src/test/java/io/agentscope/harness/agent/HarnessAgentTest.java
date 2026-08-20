@@ -56,6 +56,8 @@ import io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore;
 import io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.middleware.AgentTraceMiddleware;
+import io.agentscope.harness.agent.middleware.MemoryFlushMiddleware;
+import io.agentscope.harness.agent.middleware.MemoryMaintenanceMiddleware;
 import io.agentscope.harness.agent.middleware.SubagentEntry;
 import io.agentscope.harness.agent.middleware.WorkspaceContextMiddleware;
 import io.agentscope.harness.agent.sandbox.SandboxContext;
@@ -1157,6 +1159,53 @@ class HarnessAgentTest {
         List<String> toolNames =
                 child.getToolkit().getToolSchemas().stream().map(ToolSchema::getName).toList();
         assertFalse(toolNames.contains("read_file"), "disableFilesystemTools should be mirrored");
+    }
+
+    @Test
+    void disableSubagentMemoryHooks_keepsMainHooksAndDisablesAutomaticChildren() throws Exception {
+        Files.createDirectories(workspace);
+        SubagentDeclaration declaration =
+                SubagentDeclaration.builder()
+                        .name("worker")
+                        .description("declared worker")
+                        .workspaceMode(WorkspaceMode.ISOLATED)
+                        .inlineAgentsBody("Complete the delegated task.")
+                        .build();
+        HarnessAgent.Builder builder =
+                HarnessAgent.builder()
+                        .name("main")
+                        .model(stubModel("ok"))
+                        .workspace(workspace)
+                        .abstractFilesystem(new LocalFilesystem(workspace))
+                        .subagent(declaration)
+                        .disableSubagentMemoryHooks();
+
+        List<SubagentEntry> entries = builder.buildSubagentEntries(workspace);
+        try (HarnessAgent main = builder.build()) {
+            assertTrue(
+                    main.getDelegate().getMiddlewares().stream()
+                            .anyMatch(MemoryFlushMiddleware.class::isInstance));
+            assertTrue(
+                    main.getDelegate().getMiddlewares().stream()
+                            .anyMatch(MemoryMaintenanceMiddleware.class::isInstance));
+        }
+
+        for (String childName : List.of("general-purpose", "worker")) {
+            SubagentEntry entry =
+                    entries.stream()
+                            .filter(candidate -> childName.equals(candidate.name()))
+                            .findFirst()
+                            .orElseThrow();
+            try (HarnessAgent child =
+                    (HarnessAgent) entry.factory().create(RuntimeContext.empty())) {
+                assertFalse(
+                        child.getDelegate().getMiddlewares().stream()
+                                .anyMatch(MemoryFlushMiddleware.class::isInstance));
+                assertFalse(
+                        child.getDelegate().getMiddlewares().stream()
+                                .anyMatch(MemoryMaintenanceMiddleware.class::isInstance));
+            }
+        }
     }
 
     @Test

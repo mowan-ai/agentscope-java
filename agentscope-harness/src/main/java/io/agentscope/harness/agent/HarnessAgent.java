@@ -1194,6 +1194,7 @@ public class HarnessAgent implements Agent, AutoCloseable {
         boolean disableShellTool = false;
         boolean disableMemoryTools = false;
         boolean disableMemoryHooks = false;
+        boolean disableSubagentMemoryHooks = false;
         boolean disableTranscript = false;
         TranscriptStore transcriptStore;
         String transcriptTenant;
@@ -1204,6 +1205,7 @@ public class HarnessAgent implements Agent, AutoCloseable {
         boolean disableDynamicSkills = false;
         boolean disableDefaultWorkspaceSkills = false;
         boolean disableDynamicSubagents = false;
+        boolean disableWorkspaceSubagents = false;
         boolean disableToolsConfig = false;
 
         boolean skillManageToolEnabled = false;
@@ -2083,6 +2085,15 @@ public class HarnessAgent implements Agent, AutoCloseable {
         }
 
         /**
+         * Prevents loading subagent declarations from {@code workspace/subagents/*.md} while
+         * keeping built-in, programmatic, and explicitly declared subagents available.
+         */
+        public Builder disableWorkspaceSubagents() {
+            this.disableWorkspaceSubagents = true;
+            return this;
+        }
+
+        /**
          * Skips registration of {@code memory_search} / {@code memory_get} / {@code memory_save} /
          * {@code session_search}, and omits matching Memory Recall / tool-based Persistence
          * guidance from the workspace system prompt.
@@ -2100,6 +2111,16 @@ public class HarnessAgent implements Agent, AutoCloseable {
          */
         public Builder disableMemoryHooks() {
             this.disableMemoryHooks = true;
+            return this;
+        }
+
+        /**
+         * Disables memory flush and background consolidation for automatically constructed
+         * built-in and declared subagents without changing memory hooks on this agent. Custom
+         * subagent factories remain responsible for configuring their own agents.
+         */
+        public Builder disableSubagentMemoryHooks() {
+            this.disableSubagentMemoryHooks = true;
             return this;
         }
 
@@ -2490,7 +2511,7 @@ public class HarnessAgent implements Agent, AutoCloseable {
 
             Object capturedSubagentMw = null;
             if (!leafSubagent && !disableSubagents && model != null) {
-                if (filesystem != null && !disableDynamicSubagents) {
+                if (filesystem != null && !disableDynamicSubagents && !disableWorkspaceSubagents) {
                     DynamicSubagentsMiddleware dynMw =
                             HarnessAgentBuilderSupport.buildDynamicSubagentsMiddleware(
                                     this, wsManager, resolvedWorkspace, capturedSandboxFs);
