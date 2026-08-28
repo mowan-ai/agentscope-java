@@ -225,10 +225,18 @@ public class AgentSpawnTool {
     private volatile RemoteSubagentTransport remoteTransport = new AgentProtocolTransport();
 
     private record SpawnedAgent(
-            String key, String agentId, String sessionId, String label, Agent agent, int depth) {}
+            String key,
+            String agentId,
+            String sessionId,
+            String label,
+            Agent agent,
+            String ownerUserId,
+            int depth) {}
+
+    private record LabelKey(String userId, String label) {}
 
     private final ConcurrentHashMap<String, SpawnedAgent> agentsByKey = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, String> labelToKey = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<LabelKey, String> labelToKey = new ConcurrentHashMap<>();
 
     /**
      * Creates an {@code AgentSpawnTool} that derives the active user-id from each tool call's
@@ -360,7 +368,7 @@ public class AgentSpawnTool {
         }
         log.debug("agent_spawn resolved: agentId={}", agentId);
         Agent agent = agentOpt.get();
-        String currentUserId = runtimeContext != null ? runtimeContext.getUserId() : null;
+        String currentUserId = normalizeUserId(runtimeContext);
         String parentSessionId = runtimeContext != null ? runtimeContext.getSessionId() : null;
         var declOpt = manager.getDeclaration(agentId);
         boolean persist = declOpt.map(SubagentDeclaration::isPersistSession).orElse(false);
@@ -368,33 +376,40 @@ public class AgentSpawnTool {
         String key;
         String sessionId;
         if (persist) {
-            String hash = deterministicHash(parentSessionId, agentId, canonLabel);
+            String hash = deterministicHash(currentUserId, parentSessionId, agentId, canonLabel);
             key = "agent:" + agentId + ":" + hash;
             sessionId = "sub-" + hash;
             // Reuse existing agent if same deterministic key was already spawned.
             SpawnedAgent existing = agentsByKey.get(key);
             if (existing != null) {
-                propagatePlanMode(
-                        parentState, currentUserId, existing.sessionId(), existing.agent());
-                propagateParentDenyRules(
-                        parentState,
-                        currentUserId,
-                        existing.sessionId(),
-                        existing.agent(),
-                        declOpt);
-                String spawnInfo = formatSpawnInfo(key, agentId, sessionId, null);
-                boolean hasTask = task != null && !task.isBlank();
-                if (!hasTask) {
-                    return Mono.just(spawnInfo + "\nstatus: accepted (reused)");
+                if (!sameUser(existing.ownerUserId(), currentUserId)) {
+                    // A key written by an older version may collide before userId was included in
+                    // the deterministic seed. Never overwrite another user's live entry.
+                    key = "agent:" + agentId + ":" + UUID.randomUUID();
+                    sessionId = "sub-" + UUID.randomUUID();
+                } else {
+                    propagatePlanMode(
+                            parentState, currentUserId, existing.sessionId(), existing.agent());
+                    propagateParentDenyRules(
+                            parentState,
+                            currentUserId,
+                            existing.sessionId(),
+                            existing.agent(),
+                            declOpt);
+                    String spawnInfo = formatSpawnInfo(key, agentId, sessionId, null);
+                    boolean hasTask = task != null && !task.isBlank();
+                    if (!hasTask) {
+                        return Mono.just(spawnInfo + "\nstatus: accepted (reused)");
+                    }
+                    return execSpawnTask(
+                            existing,
+                            runtimeContext,
+                            parentState,
+                            spawnInfo,
+                            task,
+                            timeoutSeconds,
+                            declOpt);
                 }
-                return execSpawnTask(
-                        existing,
-                        runtimeContext,
-                        parentState,
-                        spawnInfo,
-                        task,
-                        timeoutSeconds,
-                        declOpt);
             }
         } else {
             key = "agent:" + agentId + ":" + UUID.randomUUID();
@@ -402,17 +417,20 @@ public class AgentSpawnTool {
         }
 
         // Label uniqueness check — skipped above for persist=true reuse path (already returned).
-        if (canonLabel != null && labelToKey.containsKey(canonLabel.toLowerCase())) {
+        LabelKey labelKey = canonLabel != null ? labelKey(currentUserId, canonLabel) : null;
+        if (labelKey != null && labelToKey.containsKey(labelKey)) {
             return Mono.just("Error: Label already in use: " + canonLabel);
         }
 
         SpawnedAgent spawned =
-                new SpawnedAgent(key, agentId, sessionId, canonLabel, agent, nextDepth);
+                new SpawnedAgent(
+                        key, agentId, sessionId, canonLabel, agent, currentUserId, nextDepth);
         agentsByKey.put(key, spawned);
-        if (canonLabel != null) {
-            labelToKey.put(canonLabel.toLowerCase(), key);
+        if (labelKey != null) {
+            labelToKey.put(labelKey, key);
         }
-        persistSpawnEntry(parentState, key, agentId, sessionId, canonLabel, nextDepth);
+        persistSpawnEntry(
+                parentState, key, agentId, sessionId, canonLabel, currentUserId, nextDepth);
 
         // Propagate plan mode: if parent is in plan mode, force child into read-only mode too.
         propagatePlanMode(parentState, currentUserId, sessionId, agent);
@@ -432,7 +450,7 @@ public class AgentSpawnTool {
                             ? runtimeContext.get("outboundAddress", OutboundAddress.class)
                             : null;
             SubagentGatewayBridge.ExposeResult er =
-                    gatewayBridge.expose(agentId, sessionId, agent, replyTo);
+                    gatewayBridge.expose(agentId, sessionId, agent, replyTo, currentUserId);
             subagentId = er.subagentId();
         }
 
@@ -455,6 +473,8 @@ public class AgentSpawnTool {
         if (timeoutMs == 0) {
             String taskId = "task_" + UUID.randomUUID();
             final String capturedTask = task;
+            final String capturedSessionId = sessionId;
+            final String capturedUserId = currentUserId;
             TaskRunSpec spec;
             if (remote) {
                 SubagentDeclaration d = declOpt.get();
@@ -473,8 +493,8 @@ public class AgentSpawnTool {
                                         Msg reply =
                                                 manager.invokeAgent(
                                                                 agent,
-                                                                sessionId,
-                                                                currentUserId,
+                                                                capturedSessionId,
+                                                                capturedUserId,
                                                                 capturedTask,
                                                                 runtimeContext)
                                                         .block();
@@ -596,11 +616,12 @@ public class AgentSpawnTool {
             return Mono.just("Error: message is required");
         }
 
+        String currentUserId = normalizeUserId(runtimeContext);
         String key;
         if (hasKey) {
             key = agentKey.trim();
         } else {
-            key = labelToKey.get(label.trim().toLowerCase());
+            key = labelToKey.get(labelKey(currentUserId, label.trim()));
             if (key == null) {
                 key = tryResolveLabelFromState(parentState, label.trim());
             }
@@ -617,10 +638,17 @@ public class AgentSpawnTool {
             return Mono.just("Error: Unknown agent_key: " + key);
         }
         final SpawnedAgent spawned = resolved;
+        if (!sameUser(spawned.ownerUserId(), currentUserId)) {
+            log.warn(
+                    "Rejected agent_send for key={} because owner={} differs from current user={}",
+                    key,
+                    spawned.ownerUserId(),
+                    currentUserId);
+            return Mono.just("Error: agent_key does not belong to the current user");
+        }
 
         boolean forceSync = isForceSync(runtimeContext);
         long timeoutMs = resolveEffectiveTimeoutMs(timeoutSeconds, runtimeContext);
-        String currentUserId = runtimeContext != null ? runtimeContext.getUserId() : null;
         String parentSessionId = runtimeContext != null ? runtimeContext.getSessionId() : null;
         DefaultAgentManager manager = managerFor(runtimeContext);
         propagatePlanMode(parentState, currentUserId, spawned.sessionId(), spawned.agent());
@@ -699,14 +727,19 @@ public class AgentSpawnTool {
     }
 
     @Tool(name = "agent_list", description = "List active subagents spawned by this agent.")
-    public String agentList() {
-        if (agentsByKey.isEmpty()) {
+    public String agentList(RuntimeContext runtimeContext) {
+        String currentUserId = normalizeUserId(runtimeContext);
+        List<SpawnedAgent> visible =
+                agentsByKey.values().stream()
+                        .filter(agent -> sameUser(agent.ownerUserId(), currentUserId))
+                        .toList();
+        if (visible.isEmpty()) {
             return "No active subagents.";
         }
 
         StringBuilder sb =
-                new StringBuilder("Active subagents (").append(agentsByKey.size()).append("):\n");
-        for (SpawnedAgent a : agentsByKey.values()) {
+                new StringBuilder("Active subagents (").append(visible.size()).append("):\n");
+        for (SpawnedAgent a : visible) {
             sb.append("- agent_key: ").append(a.key()).append("\n");
             sb.append("  agent_id: ").append(a.agentId()).append("\n");
             if (a.label() != null) {
@@ -715,6 +748,11 @@ public class AgentSpawnTool {
             sb.append("  spawn_depth: ").append(a.depth()).append("\n");
         }
         return sb.toString().trim();
+    }
+
+    /** Backward-compatible direct-call overload; an empty context can only see anonymous entries. */
+    public String agentList() {
+        return agentList(RuntimeContext.empty());
     }
 
     // -----------------------------------------------------------------
@@ -1055,6 +1093,7 @@ public class AgentSpawnTool {
             String agentId,
             String sessionId,
             String label,
+            String ownerUserId,
             int depth) {
         if (parentState == null) {
             return;
@@ -1064,7 +1103,7 @@ public class AgentSpawnTool {
                 .putSpawnEntry(
                         key,
                         new io.agentscope.core.state.ToolContextState.SpawnEntry(
-                                key, agentId, sessionId, label, depth));
+                                key, agentId, sessionId, label, depth, ownerUserId));
     }
 
     private String tryResolveLabelFromState(AgentState parentState, String label) {
@@ -1106,10 +1145,13 @@ public class AgentSpawnTool {
                         entry.sessionId(),
                         entry.label(),
                         agentOpt.get(),
+                        entry.ownerUserId() != null
+                                ? normalizeUserId(entry.ownerUserId())
+                                : normalizeUserId(runtimeContext),
                         entry.depth());
         agentsByKey.put(key, restored);
         if (entry.label() != null) {
-            labelToKey.put(entry.label().toLowerCase(), key);
+            labelToKey.put(labelKey(restored.ownerUserId(), entry.label()), key);
         }
         log.info(
                 "Restored subagent from persisted state: key={}, agentId={}", key, entry.agentId());
@@ -1623,7 +1665,7 @@ public class AgentSpawnTool {
             Optional<SubagentDeclaration> declOpt) {
         boolean forceSync = isForceSync(runtimeContext);
         long timeoutMs = resolveEffectiveTimeoutMs(timeoutSeconds, runtimeContext);
-        String currentUserId = runtimeContext != null ? runtimeContext.getUserId() : null;
+        String currentUserId = normalizeUserId(runtimeContext);
         String parentSessionId = runtimeContext != null ? runtimeContext.getSessionId() : null;
         DefaultAgentManager manager = managerFor(runtimeContext);
         boolean remote = declOpt.map(SubagentDeclaration::isRemote).orElse(false);
@@ -1707,6 +1749,35 @@ public class AgentSpawnTool {
         return label != null
                 ? SessionIdUtils.deterministicHash(parent, agentId, label)
                 : SessionIdUtils.deterministicHash(parent, agentId);
+    }
+
+    /**
+     * Derives a deterministic hash that includes the owning user. This keeps persistent child
+     * handles distinct when two users happen to use the same parent session id.
+     */
+    static String deterministicHash(
+            String userId, String parentSessionId, String agentId, String label) {
+        String owner = normalizeUserId(userId);
+        String parent = parentSessionId != null ? parentSessionId : "anon";
+        return label != null
+                ? SessionIdUtils.deterministicHash(owner, parent, agentId, label)
+                : SessionIdUtils.deterministicHash(owner, parent, agentId);
+    }
+
+    private static String normalizeUserId(RuntimeContext runtimeContext) {
+        return normalizeUserId(runtimeContext != null ? runtimeContext.getUserId() : null);
+    }
+
+    private static String normalizeUserId(String userId) {
+        return userId == null ? "" : userId.trim();
+    }
+
+    private static boolean sameUser(String first, String second) {
+        return normalizeUserId(first).equals(normalizeUserId(second));
+    }
+
+    private static LabelKey labelKey(String userId, String label) {
+        return new LabelKey(normalizeUserId(userId), label.trim().toLowerCase());
     }
 
     private static void propagateParentDenyRules(

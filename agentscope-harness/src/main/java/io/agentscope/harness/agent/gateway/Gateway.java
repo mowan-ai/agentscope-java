@@ -156,8 +156,23 @@ public interface Gateway {
         return Mono.error(new UnsupportedOperationException("Subagent routing not supported"));
     }
 
+    /**
+     * Routes messages to an exposed subagent while carrying the caller identity for ownership
+     * checks. The legacy overload remains available for callers that do not have a user context.
+     */
+    default Mono<Msg> runSubagent(
+            String subagentId, List<Msg> messages, RuntimeContext callerContext) {
+        return runSubagent(subagentId, messages);
+    }
+
     /** Streaming variant of {@link #runSubagent(String, List)}. */
     default Flux<AgentEvent> runSubagentStream(String subagentId, List<Msg> messages) {
         return Flux.error(new UnsupportedOperationException("Subagent streaming not supported"));
+    }
+
+    /** Streaming variant that carries caller identity for exposed-subagent ownership checks. */
+    default Flux<AgentEvent> runSubagentStream(
+            String subagentId, List<Msg> messages, RuntimeContext callerContext) {
+        return runSubagentStream(subagentId, messages);
     }
 }

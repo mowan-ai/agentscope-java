@@ -47,4 +47,14 @@ public interface SubagentGatewayBridge {
      * @return the expose result containing the subagentId handle
      */
     ExposeResult expose(String agentId, String sessionId, Agent agent, OutboundAddress replyTo);
+
+    /**
+     * Exposes a subagent while preserving the originating user identity. Existing bridge
+     * implementations remain source-compatible; gateways that support ownership checks should
+     * override this method.
+     */
+    default ExposeResult expose(
+            String agentId, String sessionId, Agent agent, OutboundAddress replyTo, String userId) {
+        return expose(agentId, sessionId, agent, replyTo);
+    }
 }

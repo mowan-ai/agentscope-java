@@ -160,7 +160,8 @@ public final class ToolContextState {
             @JsonProperty("agent_id") String agentId,
             @JsonProperty("session_id") String sessionId,
             @JsonProperty("label") String label,
-            @JsonProperty("depth") int depth) {
+            @JsonProperty("depth") int depth,
+            @JsonProperty("owner_user_id") String ownerUserId) {
 
         @JsonCreator
         public SpawnEntry(
@@ -168,12 +169,19 @@ public final class ToolContextState {
                 @JsonProperty("agent_id") String agentId,
                 @JsonProperty("session_id") String sessionId,
                 @JsonProperty("label") String label,
-                @JsonProperty("depth") int depth) {
+                @JsonProperty("depth") int depth,
+                @JsonProperty("owner_user_id") String ownerUserId) {
             this.key = key;
             this.agentId = agentId;
             this.sessionId = sessionId;
             this.label = label;
             this.depth = depth;
+            this.ownerUserId = ownerUserId;
+        }
+
+        /** Backward-compatible constructor for state written before owner tracking was added. */
+        public SpawnEntry(String key, String agentId, String sessionId, String label, int depth) {
+            this(key, agentId, sessionId, label, depth, null);
         }
     }
 
