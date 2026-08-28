@@ -354,6 +354,7 @@ public final class HarnessGateway implements Gateway, WakeupDispatcher.WakeupTar
             String agentId,
             String sessionId,
             Agent agent,
+            String userId,
             OutboundAddress replyTo) {}
 
     /**
@@ -368,14 +369,28 @@ public final class HarnessGateway implements Gateway, WakeupDispatcher.WakeupTar
      */
     public String exposeSubagent(
             String agentId, String sessionId, Agent agent, OutboundAddress replyTo) {
+        return exposeSubagent(agentId, sessionId, agent, replyTo, null);
+    }
+
+    /** Exposes a subagent and records the originating user for direct-route authorization. */
+    public String exposeSubagent(
+            String agentId, String sessionId, Agent agent, OutboundAddress replyTo, String userId) {
         Objects.requireNonNull(agent, "agent");
         String subagentId = "sub-" + UUID.randomUUID().toString().substring(0, 8);
         exposedSessions.put(
-                subagentId, new ExposedSession(subagentId, agentId, sessionId, agent, replyTo));
+                subagentId,
+                new ExposedSession(
+                        subagentId, agentId, sessionId, agent, normalizeUserId(userId), replyTo));
         try {
             subagentRegistry.register(
                     new SubagentRecord(
-                            subagentId, agentId, sessionId, null, null, Instant.now(), null));
+                            subagentId,
+                            agentId,
+                            sessionId,
+                            normalizeUserId(userId),
+                            null,
+                            Instant.now(),
+                            null));
         } catch (RuntimeException e) {
             log.warn(
                     "Failed to persist exposed-subagent record {}: {}", subagentId, e.getMessage());
@@ -476,6 +491,7 @@ public final class HarnessGateway implements Gateway, WakeupDispatcher.WakeupTar
                         record.agentId(),
                         record.sessionId(),
                         agentOpt.get(),
+                        normalizeUserId(record.userId()),
                         null);
         exposedSessions.putIfAbsent(subagentId, rebuilt);
         return exposedSessions.get(subagentId);
@@ -483,12 +499,27 @@ public final class HarnessGateway implements Gateway, WakeupDispatcher.WakeupTar
 
     @Override
     public Mono<Msg> runSubagent(String subagentId, List<Msg> messages) {
+        return runSubagent(subagentId, messages, null);
+    }
+
+    @Override
+    public Mono<Msg> runSubagent(
+            String subagentId, List<Msg> messages, RuntimeContext callerContext) {
         ExposedSession session = resolveExposed(subagentId);
         if (session == null) {
             return Mono.error(new IllegalArgumentException("Unknown subagentId: " + subagentId));
         }
+        if (!sameUser(session.userId(), callerContext != null ? callerContext.getUserId() : null)) {
+            return Mono.error(
+                    new IllegalArgumentException(
+                            "Exposed subagent does not belong to the current user"));
+        }
 
-        RuntimeContext rtc = RuntimeContext.builder().sessionId(session.sessionId()).build();
+        RuntimeContext rtc =
+                RuntimeContext.builder(callerContext)
+                        .sessionId(session.sessionId())
+                        .userId(session.userId())
+                        .build();
         String gateKey = "subagent:" + subagentId;
 
         return withGatedTurn(gateKey, () -> invokeExposedAgent(session.agent(), messages, rtc))
@@ -536,14 +567,37 @@ public final class HarnessGateway implements Gateway, WakeupDispatcher.WakeupTar
         return "gw-" + SessionIdUtils.deterministicHash(gateKey);
     }
 
+    private static String normalizeUserId(String userId) {
+        return userId == null ? "" : userId.trim();
+    }
+
+    private static boolean sameUser(String first, String second) {
+        return normalizeUserId(first).equals(normalizeUserId(second));
+    }
+
     @Override
     public Flux<AgentEvent> runSubagentStream(String subagentId, List<Msg> messages) {
+        return runSubagentStream(subagentId, messages, null);
+    }
+
+    @Override
+    public Flux<AgentEvent> runSubagentStream(
+            String subagentId, List<Msg> messages, RuntimeContext callerContext) {
         ExposedSession session = resolveExposed(subagentId);
         if (session == null) {
             return Flux.error(new IllegalArgumentException("Unknown subagentId: " + subagentId));
         }
+        if (!sameUser(session.userId(), callerContext != null ? callerContext.getUserId() : null)) {
+            return Flux.error(
+                    new IllegalArgumentException(
+                            "Exposed subagent does not belong to the current user"));
+        }
 
-        RuntimeContext rtc = RuntimeContext.builder().sessionId(session.sessionId()).build();
+        RuntimeContext rtc =
+                RuntimeContext.builder(callerContext)
+                        .sessionId(session.sessionId())
+                        .userId(session.userId())
+                        .build();
         String gateKey = "subagent:" + subagentId;
 
         return withGatedStream(gateKey, () -> streamExposedAgent(session.agent(), messages, rtc));

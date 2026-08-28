@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.agent.test.MockModel;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
@@ -221,5 +222,35 @@ class SubagentRegistryRecoveryIntegrationTest {
                         Instant.now().minusSeconds(120),
                         Instant.now().minusSeconds(60)));
         assertTrue(reader.find("sub-expired").isEmpty(), "expired record must not resolve");
+    }
+
+    @Test
+    void exposedSubagentRejectsDifferentUser() {
+        AgentStateStore sharedState = new InMemoryAgentStateStore();
+        HarnessGateway gateway = HarnessGateway.create();
+        HarnessAgent exposed = buildEchoSubagent(sharedState);
+        try {
+            String subagentId =
+                    gateway.exposeSubagent("echo", SUB_SESSION, exposed, null, "user-a");
+
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            gateway.runSubagent(
+                                            subagentId,
+                                            List.of(ping()),
+                                            RuntimeContext.builder().userId("user-b").build())
+                                    .block());
+            assertEquals(
+                    "turns=1",
+                    text(
+                            gateway.runSubagent(
+                                            subagentId,
+                                            List.of(ping()),
+                                            RuntimeContext.builder().userId("user-a").build())
+                                    .block()));
+        } finally {
+            exposed.close();
+        }
     }
 }

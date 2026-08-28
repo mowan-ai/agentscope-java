@@ -285,6 +285,95 @@ class AgentSpawnToolKeyTest {
     }
 
     @Test
+    void persistentHandlesAndLabels_areScopedByUser() {
+        ReActAgent child =
+                ReActAgent.builder()
+                        .name("child")
+                        .sysPrompt("child")
+                        .model(replyingModel())
+                        .build();
+        SubagentDeclaration declaration =
+                SubagentDeclaration.builder()
+                        .name("worker")
+                        .description("worker")
+                        .inlineAgentsBody("worker")
+                        .persistSession(true)
+                        .build();
+        DefaultAgentManager manager =
+                new DefaultAgentManager(
+                        List.of(new SubagentEntry("worker", "worker", rc -> child, declaration)),
+                        null);
+        AgentSpawnTool tool = new AgentSpawnTool(manager, new NoopTaskRepository(), 0);
+        RuntimeContext userA =
+                RuntimeContext.builder().userId("user-a").sessionId("same-session").build();
+        RuntimeContext userB =
+                RuntimeContext.builder().userId("user-b").sessionId("same-session").build();
+
+        String spawnA =
+                tool.agentSpawn(userA, null, "worker", null, "shared-label", null, null).block();
+        String spawnB =
+                tool.agentSpawn(userB, null, "worker", null, "shared-label", null, null).block();
+        String keyA = firstLineValue(spawnA, "agent_key: ");
+        String keyB = firstLineValue(spawnB, "agent_key: ");
+
+        assertNotEquals(keyA, keyB);
+        assertTrue(tool.agentList(userA).contains(keyA));
+        assertTrue(tool.agentList(userB).contains(keyB));
+        assertFalse(tool.agentList(userA).contains(keyB));
+        assertTrue(
+                tool.agentSend(userB, null, keyA, null, "cross-user", 1)
+                        .block()
+                        .contains("does not belong to the current user"));
+    }
+
+    @Test
+    void restoredSpawnEntry_ownerIsEnforced() {
+        ReActAgent child =
+                ReActAgent.builder()
+                        .name("child")
+                        .sysPrompt("child")
+                        .model(replyingModel())
+                        .build();
+        SubagentDeclaration declaration =
+                SubagentDeclaration.builder()
+                        .name("worker")
+                        .description("worker")
+                        .inlineAgentsBody("worker")
+                        .build();
+        DefaultAgentManager manager =
+                new DefaultAgentManager(
+                        List.of(new SubagentEntry("worker", "worker", rc -> child, declaration)),
+                        null);
+        AgentSpawnTool tool = new AgentSpawnTool(manager, new NoopTaskRepository(), 0);
+        AgentState state = AgentState.builder().build();
+        String key = "agent:worker:owned";
+        state.getToolContext()
+                .putSpawnEntry(
+                        key,
+                        new ToolContextState.SpawnEntry(
+                                key, "worker", "sub-owned", null, 1, "user-a"));
+
+        String result =
+                tool.agentSend(
+                                RuntimeContext.builder().userId("user-b").sessionId("s").build(),
+                                state,
+                                key,
+                                null,
+                                "cross-user",
+                                1)
+                        .block();
+        assertTrue(result.contains("does not belong to the current user"));
+    }
+
+    private static String firstLineValue(String text, String prefix) {
+        return text.lines()
+                .filter(line -> line.startsWith(prefix))
+                .findFirst()
+                .orElseThrow()
+                .substring(prefix.length());
+    }
+
+    @Test
     void declarationPersistSession_defaultsFalse() {
         SubagentDeclaration decl =
                 SubagentDeclaration.builder()
