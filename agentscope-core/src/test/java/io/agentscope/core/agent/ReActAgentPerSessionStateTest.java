@@ -412,9 +412,7 @@ class ReActAgentPerSessionStateTest {
         agent.interrupt("u1", "sessA");
 
         Msg reply = future.get(5, TimeUnit.SECONDS);
-        assertEquals(
-                "I noticed that you have interrupted me. What can I do for you?",
-                reply.getTextContent());
+        assertEquals("我注意到你刚刚中断了当前操作。接下来需要我做什么？", reply.getTextContent());
         assertEquals(GenerateReason.INTERRUPTED, reply.getGenerateReason());
 
         ReActAgent reborn = agent(store);
@@ -422,14 +420,11 @@ class ReActAgentPerSessionStateTest {
         List<String> texts = allText(restoredState);
         assertTrue(texts.contains("hello"), "user input should remain in persisted session state");
         assertTrue(
-                texts.contains("I noticed that you have interrupted me. What can I do for you?"),
+                texts.contains("我注意到你刚刚中断了当前操作。接下来需要我做什么？"),
                 "interrupt recovery message should be persisted to the state store");
         Msg restoredRecovery =
                 restoredState.getContext().stream()
-                        .filter(
-                                msg ->
-                                        "I noticed that you have interrupted me. What can I do for you?"
-                                                .equals(msg.getTextContent()))
+                        .filter(msg -> "我注意到你刚刚中断了当前操作。接下来需要我做什么？".equals(msg.getTextContent()))
                         .findFirst()
                         .orElseThrow();
         assertEquals(GenerateReason.INTERRUPTED, restoredRecovery.getGenerateReason());

@@ -3948,8 +3948,7 @@ public class ReActAgent extends AgentBase implements AutoCloseable {
                     // The tool_use written during reasoning would otherwise be persisted with no
                     // matching tool result, leaving the AgentState inconsistent for the next run.
                     scope.synthesizeErrorResultsForPendingToolCalls();
-                    String recoveryText =
-                            "I noticed that you have interrupted me. What can I do for you?";
+                    String recoveryText = "我注意到你刚刚中断了当前操作。接下来需要我做什么？";
                     Msg recoveryMsg =
                             AssistantMessage.builder()
                                     .name(getName())
