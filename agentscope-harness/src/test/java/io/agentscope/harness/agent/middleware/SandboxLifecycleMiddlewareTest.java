@@ -31,7 +31,6 @@ import io.agentscope.harness.agent.filesystem.sandbox.SandboxBackedFilesystem;
 import io.agentscope.harness.agent.sandbox.ExecResult;
 import io.agentscope.harness.agent.sandbox.Sandbox;
 import io.agentscope.harness.agent.sandbox.SandboxAcquireResult;
-import io.agentscope.harness.agent.sandbox.SandboxBindingKey;
 import io.agentscope.harness.agent.sandbox.SandboxContext;
 import io.agentscope.harness.agent.sandbox.SandboxManager;
 import io.agentscope.harness.agent.sandbox.SandboxState;
@@ -126,16 +125,15 @@ class SandboxLifecycleMiddlewareTest {
         SandboxLifecycleMiddleware mw = new SandboxLifecycleMiddleware(manager, fs);
 
         RuntimeContext ctx = ctxWithSandbox("solo-session");
-        String expectedKey = SandboxBindingKey.resolve(ctx);
 
         mw.acquireForCall(ctx);
         assertEquals(1, acquireCount.get());
-        assertNotNull(fs.getSandbox(expectedKey));
+        assertNotNull(fs.getSandbox());
 
         mw.releaseForCall(ctx);
         verify(manager).release(any());
         // sandbox is unbound after release
-        assertNull(fs.getSandbox(expectedKey));
+        assertNull(fs.getSandbox());
     }
 
     private static class NoopSandbox implements Sandbox {
