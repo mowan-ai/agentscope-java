@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.agentscope.core.agent.accumulator.ToolCallsAccumulator;
 import io.agentscope.core.message.ContentBlock;
 import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ToolResultBlock;
@@ -125,6 +126,66 @@ class ToolExecutorTest {
                 "Error: Tool execution failed: Tool error: test failure",
                 content,
                 "Error message should be wrapped by executor");
+    }
+
+    @Test
+    @DisplayName(
+            "Should return JSON correction feedback without invoking tools after parse failure")
+    void shouldExposeMalformedStreamingArgumentsBeforeToolInvocation() {
+        AtomicInteger invocations = new AtomicInteger();
+        toolkit.registerTool(
+                new AgentTool() {
+                    @Override
+                    public String getName() {
+                        return "story_workflow_turn_executor";
+                    }
+
+                    @Override
+                    public String getDescription() {
+                        return "Record a story choice";
+                    }
+
+                    @Override
+                    public Map<String, Object> getParameters() {
+                        // Optional fields previously let the normalized empty object pass
+                        // validation.
+                        return Map.of("type", "object", "properties", Map.of());
+                    }
+
+                    @Override
+                    public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
+                        invocations.incrementAndGet();
+                        return Mono.just(ToolResultBlock.text("Story saved"));
+                    }
+                });
+
+        ToolCallsAccumulator accumulator = new ToolCallsAccumulator();
+        accumulator.add(
+                ToolUseBlock.builder()
+                        .id("call-story")
+                        .name("story_workflow_turn_executor")
+                        .content("{\"storyContinue\">{\"choice\":: ")
+                        .build());
+        accumulator.add(
+                ToolUseBlock.builder()
+                        .id("call-story")
+                        .name("__fragment__")
+                        .content("{\"title\":\"A story\"}}}")
+                        .build());
+
+        List<ToolResultBlock> responses =
+                toolkit.callTools(accumulator.buildAllToolCalls(), null, null, null).block(TIMEOUT);
+
+        assertNotNull(responses);
+        assertEquals(1, responses.size());
+        ToolResultBlock response = responses.get(0);
+        assertEquals("call-story", response.getId());
+        assertEquals("story_workflow_turn_executor", response.getName());
+        String error = extractFirstText(response);
+        assertTrue(error.startsWith("Error:"));
+        assertTrue(error.contains("Invalid JSON tool arguments"));
+        assertTrue(error.contains("regenerate"));
+        assertEquals(0, invocations.get(), "Malformed arguments must not reach the domain tool");
     }
 
     @Test

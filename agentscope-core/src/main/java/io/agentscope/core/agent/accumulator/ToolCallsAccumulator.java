@@ -23,6 +23,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Tool calls accumulator for accumulating streaming tool call chunks.
@@ -38,6 +40,8 @@ import java.util.stream.Collectors;
  * @hidden
  */
 public class ToolCallsAccumulator implements ContentAccumulator<ToolUseBlock> {
+
+    private static final Logger log = LoggerFactory.getLogger(ToolCallsAccumulator.class);
 
     // Map to support multiple parallel tool calls
     // Key: tool identifier (ID, name, or index)
@@ -90,9 +94,11 @@ public class ToolCallsAccumulator implements ContentAccumulator<ToolUseBlock> {
             }
         }
 
-        ToolUseBlock build() {
+        /** Only completed calls expose parse failures; partial snapshots are expected to be incomplete. */
+        ToolUseBlock build(boolean complete) {
             Map<String, Object> finalArgs = new HashMap<>(args);
             String rawContentStr = this.rawContent.toString();
+            Map<String, Object> resultMetadata = new HashMap<>(metadata);
 
             // Always attempt to parse the fully accumulated raw JSON. Early stream chunks may
             // look like complete objects ({...}) but still contain null/incomplete values;
@@ -102,19 +108,45 @@ public class ToolCallsAccumulator implements ContentAccumulator<ToolUseBlock> {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> parsed =
                             JsonUtils.getJsonCodec().fromJson(rawContentStr, Map.class);
-                    if (parsed != null) {
-                        for (Map.Entry<String, Object> entry : parsed.entrySet()) {
-                            if (entry.getValue() == null) {
-                                continue;
-                            }
-                            Object existing = finalArgs.get(entry.getKey());
-                            if (existing == null || !finalArgs.containsKey(entry.getKey())) {
-                                finalArgs.put(entry.getKey(), entry.getValue());
-                            }
+                    if (parsed == null) {
+                        throw new IllegalArgumentException(
+                                "Tool arguments must be a JSON object, not null");
+                    }
+                    for (Map.Entry<String, Object> entry : parsed.entrySet()) {
+                        if (entry.getValue() == null) {
+                            continue;
+                        }
+                        Object existing = finalArgs.get(entry.getKey());
+                        if (existing == null || !finalArgs.containsKey(entry.getKey())) {
+                            finalArgs.put(entry.getKey(), entry.getValue());
                         }
                     }
-                } catch (Exception ignored) {
-                    // Parsing failed, keep previously merged args
+                } catch (Exception e) {
+                    if (complete) {
+                        log.warn(
+                                "Failed to parse completed tool call arguments: id={}, name={},"
+                                        + " argumentsLength={}",
+                                toolId,
+                                name,
+                                rawContentStr.length(),
+                                e);
+                        // Retain the failure without storing the raw argument payload in metadata.
+                        Throwable cause = e.getCause() != null ? e.getCause() : e;
+                        String detail =
+                                cause.getMessage() != null
+                                        ? cause.getMessage()
+                                        : cause.getClass().getSimpleName();
+                        resultMetadata.put(
+                                ToolUseBlock.METADATA_ARGUMENTS_PARSE_ERROR,
+                                "Invalid JSON tool arguments: "
+                                        + detail.substring(0, Math.min(detail.length(), 512)));
+                    } else {
+                        log.trace(
+                                "Incomplete streaming tool arguments: id={}, name={}",
+                                toolId,
+                                name,
+                                e);
+                    }
                 }
             }
 
@@ -135,7 +167,7 @@ public class ToolCallsAccumulator implements ContentAccumulator<ToolUseBlock> {
                     .name(name)
                     .input(finalArgs)
                     .content(contentStr)
-                    .metadata(metadata.isEmpty() ? null : metadata)
+                    .metadata(resultMetadata.isEmpty() ? null : resultMetadata)
                     .build();
         }
 
@@ -246,7 +278,9 @@ public class ToolCallsAccumulator implements ContentAccumulator<ToolUseBlock> {
      * @return List of tool calls
      */
     public List<ToolUseBlock> buildAllToolCalls() {
-        return builders.values().stream().map(ToolCallBuilder::build).collect(Collectors.toList());
+        return builders.values().stream()
+                .map(builder -> builder.build(true))
+                .collect(Collectors.toList());
     }
 
     /**
@@ -263,7 +297,7 @@ public class ToolCallsAccumulator implements ContentAccumulator<ToolUseBlock> {
             // First try to find by ID directly
             ToolCallBuilder builder = builders.get(id);
             if (builder != null) {
-                return builder.build();
+                return builder.build(false);
             }
         }
 
@@ -271,7 +305,7 @@ public class ToolCallsAccumulator implements ContentAccumulator<ToolUseBlock> {
         if (lastToolCallKey != null) {
             ToolCallBuilder builder = builders.get(lastToolCallKey);
             if (builder != null) {
-                return builder.build();
+                return builder.build(false);
             }
         }
 

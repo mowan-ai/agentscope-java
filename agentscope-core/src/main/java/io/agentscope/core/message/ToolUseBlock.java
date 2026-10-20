@@ -36,6 +36,9 @@ public final class ToolUseBlock extends ContentBlock {
     /** Metadata key for Gemini thought signature (byte[] value). */
     public static final String METADATA_THOUGHT_SIGNATURE = "thoughtSignature";
 
+    /** Final argument parsing failure retained when raw content falls back to safe JSON. */
+    public static final String METADATA_ARGUMENTS_PARSE_ERROR = "argumentsParseError";
+
     private final String id;
     private final String name;
     private final Map<String, Object> input;

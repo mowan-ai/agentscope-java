@@ -349,6 +349,49 @@ class ToolCallsAccumulatorTest {
     }
 
     @Test
+    @DisplayName("Should preserve malformed argument diagnostics after safe content fallback")
+    void testMalformedArgumentsRemainVisible() {
+        accumulator.add(
+                ToolUseBlock.builder()
+                        .id("call-story")
+                        .name("story_workflow_turn_executor")
+                        .content("{\"storyContinue\">{\"choice\":: {}}}")
+                        .build());
+
+        ToolUseBlock result = accumulator.buildAllToolCalls().get(0);
+
+        assertEquals("{}", result.getContent());
+        assertTrue(result.getInput().isEmpty());
+        String error = (String) result.getMetadata().get("argumentsParseError");
+        assertNotNull(error);
+        assertTrue(error.contains("Invalid JSON tool arguments"));
+    }
+
+    @Test
+    @DisplayName("Should not mark unfinished streaming snapshots as final argument failures")
+    void testPartialSnapshotDoesNotPoisonCompletedArguments() {
+        accumulator.add(
+                ToolUseBlock.builder()
+                        .id("call-story")
+                        .name("story_workflow_turn_executor")
+                        .content("{\"storyContinue\":")
+                        .build());
+
+        assertTrue(accumulator.getAccumulatedToolCall("call-story").getMetadata().isEmpty());
+
+        accumulator.add(
+                ToolUseBlock.builder()
+                        .id("call-story")
+                        .name("__fragment__")
+                        .content("{\"choice\":{\"title\":\"A story\"}}}")
+                        .build());
+
+        ToolUseBlock result = accumulator.buildAllToolCalls().get(0);
+        assertTrue(result.getMetadata().isEmpty());
+        assertNotNull(result.getInput().get("storyContinue"));
+    }
+
+    @Test
     @DisplayName("Should produce valid JSON content when multiple chunks are interrupted")
     void testInterruptedMultiChunkStreamingProducesValidJsonContent() {
         // First chunk starts the arguments

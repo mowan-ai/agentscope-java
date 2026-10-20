@@ -228,6 +228,19 @@ class ToolExecutor {
             return Mono.just(ToolResultBlock.error(errorMsg));
         }
 
+        // Safe JSON fallback must not hide a completed model argument parsing failure.
+        Object argumentParseError =
+                toolCall.getMetadata().get(ToolUseBlock.METADATA_ARGUMENTS_PARSE_ERROR);
+        if (argumentParseError instanceof String error) {
+            return Mono.just(
+                    ToolResultBlock.error(
+                            error
+                                    + "\n"
+                                    + "The tool was not executed. Please regenerate the complete"
+                                    + " arguments as a valid JSON object matching the tool schema"
+                                    + " and try again."));
+        }
+
         // Validate input against schema
         String validationError =
                 ToolValidator.validateInput(toolCall.getContent(), tool.getParameters());
