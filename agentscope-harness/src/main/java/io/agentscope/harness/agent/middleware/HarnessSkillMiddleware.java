@@ -32,6 +32,7 @@ import io.agentscope.harness.agent.skill.runtime.MarketplaceStager.RepoBound;
 import io.agentscope.harness.agent.skill.runtime.MarketplaceStager.StageResult;
 import io.agentscope.harness.agent.skill.runtime.ShellPathPolicy;
 import io.agentscope.harness.agent.skill.runtime.SkillCatalog;
+import io.agentscope.harness.agent.skill.runtime.SkillPromptBuilder;
 import io.agentscope.harness.agent.skill.runtime.SkillRuntime;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -80,6 +81,7 @@ public class HarnessSkillMiddleware implements HarnessRuntimeMiddleware {
     private final MarketplaceStager stager;
     private final ShellPathPolicy shellPathPolicy;
     private final SkillRuntime runtime;
+    private volatile SkillFilter catalogFilter = SkillFilter.all();
     private final Map<AgentSkillRepository, String> sourceNamespaces;
     private final Map<String, RepoBound> frozenSkills;
     private IsolationScope isolationScope;
@@ -305,13 +307,36 @@ public class HarnessSkillMiddleware implements HarnessRuntimeMiddleware {
         SkillCatalog catalog = SkillCatalog.of(entries);
         runtime.install(catalog, ctx, agentToolkit);
 
-        String append = runtime.renderPrompt(catalog, SkillFilter.all());
+        // Loadable skills stay in the catalog; catalogFilter only controls what is advertised.
+        String append = runtime.renderPrompt(catalog, catalogFilter);
         if (append == null || append.isEmpty()) {
             return Mono.just(currentPrompt);
         }
         String base = currentPrompt != null ? currentPrompt : "";
         String separator = base.isEmpty() || base.endsWith("\n") ? "" : "\n";
         return Mono.just(base + separator + append);
+    }
+
+    /**
+     * Replaces the {@code ## Available Skills} prompt wording. The load tool and catalog binding
+     * are unchanged. Call before the first reasoning round.
+     *
+     * @return this middleware for chaining
+     */
+    public HarnessSkillMiddleware promptBuilder(SkillPromptBuilder promptBuilder) {
+        this.runtime.setPromptBuilder(promptBuilder);
+        return this;
+    }
+
+    /**
+     * Limits which loadable skills are listed in the prompt. Hidden skills remain loadable; use
+     * this for skills the host injects by other means.
+     *
+     * @return this middleware for chaining
+     */
+    public HarnessSkillMiddleware catalogFilter(SkillFilter filter) {
+        this.catalogFilter = filter != null ? filter : SkillFilter.all();
+        return this;
     }
 
     // ---------------------------------------------------------------------

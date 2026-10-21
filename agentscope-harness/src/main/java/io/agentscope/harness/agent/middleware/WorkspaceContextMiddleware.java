@@ -135,6 +135,7 @@ public class WorkspaceContextMiddleware implements HarnessRuntimeMiddleware {
     private final boolean disableMemoryHooks;
     private List<String> additionalContextFiles = List.of();
     private boolean artifactDeliveryEnabled = false;
+    private volatile WorkspaceContextRenderer renderer;
 
     public WorkspaceContextMiddleware(WorkspaceManager workspaceManager) {
         this(workspaceManager, "HarnessAgent", null, DEFAULT_MAX_CONTEXT_TOKENS, false, false);
@@ -195,6 +196,14 @@ public class WorkspaceContextMiddleware implements HarnessRuntimeMiddleware {
         this.artifactDeliveryEnabled = artifactDeliveryEnabled;
     }
 
+    /**
+     * Replaces the default English workspace section. Passing null restores the default. The
+     * renderer receives the same files and memory budget as the default section.
+     */
+    public void setRenderer(WorkspaceContextRenderer renderer) {
+        this.renderer = renderer;
+    }
+
     @Override
     public Mono<String> onSystemPrompt(Agent agent, RuntimeContext ctx, String currentPrompt) {
         return Mono.fromCallable(
@@ -202,6 +211,9 @@ public class WorkspaceContextMiddleware implements HarnessRuntimeMiddleware {
                             RuntimeContext rc = ctx != null ? ctx : RuntimeContext.empty();
                             String base = currentPrompt != null ? currentPrompt : "";
                             String section = buildWorkspaceSection(rc);
+                            if (section.isEmpty()) {
+                                return base;
+                            }
                             String separator = base.isEmpty() || base.endsWith("\n") ? "" : "\n";
                             return base + separator + section;
                         })
@@ -209,6 +221,11 @@ public class WorkspaceContextMiddleware implements HarnessRuntimeMiddleware {
     }
 
     private String buildWorkspaceSection(RuntimeContext rc) {
+        WorkspaceContextRenderer custom = this.renderer;
+        if (custom != null) {
+            String rendered = custom.render(buildView(rc));
+            return rendered != null ? rendered : "";
+        }
         String agentsContent = workspaceManager.readAgentsMd(rc).strip();
         boolean includeMemoryContext = includeMemoryContext();
         String memoryContent =
@@ -245,6 +262,42 @@ public class WorkspaceContextMiddleware implements HarnessRuntimeMiddleware {
                 buildLoadedContextSection(
                         agentsContent, memoryContent, knowledgeBlock, additionalBlock);
         return assembleSection(sessionContext, buildGuidance(), workspaceParagraph, loadedContext);
+    }
+
+    private WorkspaceContextView buildView(RuntimeContext rc) {
+        String agentsContent = workspaceManager.readAgentsMd(rc).strip();
+        boolean includeMemoryContext = includeMemoryContext();
+        String memoryContent =
+                includeMemoryContext ? workspaceManager.readMemoryMd(rc).strip() : "";
+        String knowledgeContent = workspaceManager.readKnowledgeMd(rc).strip();
+        Path workspace = workspaceManager.getWorkspace();
+        List<String> knowledgeFiles =
+                workspaceManager.listKnowledgeFiles(rc).stream()
+                        .map(file -> workspace.relativize(file).toString())
+                        .toList();
+        boolean truncated = false;
+        if (includeMemoryContext) {
+            int fixedTokens = estimateTokens(agentsContent) + estimateTokens(knowledgeContent);
+            int available = maxContextTokens - fixedTokens;
+            int maxChars = available * 4;
+            if (available > 0 && memoryContent.length() > maxChars) {
+                // Renderers own their wording, so cut without the default English notice.
+                memoryContent = memoryContent.substring(0, maxChars);
+                truncated = true;
+            }
+        }
+        return new WorkspaceContextView(
+                agentName,
+                LocalDate.now(),
+                rc != null ? rc.getSessionId() : null,
+                agentsContent,
+                memoryContent,
+                truncated,
+                includeMemoryContext,
+                knowledgeContent,
+                knowledgeFiles,
+                !disableMemoryTools,
+                !disableMemoryHooks);
     }
 
     /**

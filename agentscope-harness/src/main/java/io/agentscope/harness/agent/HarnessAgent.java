@@ -86,6 +86,7 @@ import io.agentscope.harness.agent.middleware.TeamsMiddleware;
 import io.agentscope.harness.agent.middleware.ToolResultEvictionMiddleware;
 import io.agentscope.harness.agent.middleware.TranscriptMiddleware;
 import io.agentscope.harness.agent.middleware.WorkspaceContextMiddleware;
+import io.agentscope.harness.agent.middleware.WorkspaceContextRenderer;
 import io.agentscope.harness.agent.sandbox.SandboxContext;
 import io.agentscope.harness.agent.sandbox.SandboxExecutionGuard;
 import io.agentscope.harness.agent.sandbox.SandboxManager;
@@ -1280,6 +1281,9 @@ public class HarnessAgent implements Agent, AutoCloseable {
         boolean disableAtPathExpansion = false;
         boolean disableSubagents = false;
         SubagentSectionRenderer subagentSectionRenderer;
+        WorkspaceContextRenderer workspaceContextRenderer;
+        io.agentscope.harness.agent.skill.runtime.SkillPromptBuilder skillPromptBuilder;
+        io.agentscope.core.skill.SkillFilter skillCatalogFilter;
         boolean disableDynamicSkills = false;
         boolean disableDefaultWorkspaceSkills = false;
         boolean disableDynamicSubagents = false;
@@ -2340,6 +2344,37 @@ public class HarnessAgent implements Agent, AutoCloseable {
             return this;
         }
 
+        /**
+         * Replaces the workspace system-prompt section (session header, memory and workspace
+         * guidance, loaded files) while keeping workspace, memory tools and hooks unchanged. Use
+         * this instead of {@link #disableWorkspaceContext()} when the deployment still needs
+         * {@code MEMORY.md} or knowledge injected. Not inherited by subagents.
+         */
+        public Builder workspaceContextRenderer(WorkspaceContextRenderer renderer) {
+            this.workspaceContextRenderer = renderer;
+            return this;
+        }
+
+        /**
+         * Replaces the {@code ## Available Skills} prompt wording (header and code-execution
+         * notice). Skill loading is unchanged. Not inherited by subagents.
+         */
+        public Builder skillPromptBuilder(
+                io.agentscope.harness.agent.skill.runtime.SkillPromptBuilder promptBuilder) {
+            this.skillPromptBuilder = promptBuilder;
+            return this;
+        }
+
+        /**
+         * Limits which skills are advertised in {@code <available_skills>} without making the
+         * others unloadable, for skills the host injects by other means. Not inherited by
+         * subagents.
+         */
+        public Builder skillCatalogFilter(io.agentscope.core.skill.SkillFilter filter) {
+            this.skillCatalogFilter = filter;
+            return this;
+        }
+
         public Builder disableToolsConfig() {
             this.disableToolsConfig = true;
             return this;
@@ -2592,6 +2627,7 @@ public class HarnessAgent implements Agent, AutoCloseable {
                                 disableMemoryHooks);
                 markdownMw.setAdditionalContextFiles(additionalContextFiles);
                 markdownMw.setArtifactDeliveryEnabled(artifactDeliveryEnabled);
+                markdownMw.setRenderer(workspaceContextRenderer);
                 inner.middleware(markdownMw);
             }
             if (!disableAtPathExpansion) {
@@ -2971,6 +3007,7 @@ public class HarnessAgent implements Agent, AutoCloseable {
                                         stager,
                                         shellPolicy);
                 skillMiddleware.isolationScope(fsIsolationScope);
+                skillMiddleware.promptBuilder(skillPromptBuilder).catalogFilter(skillCatalogFilter);
                 inner.middleware(skillMiddleware);
 
                 // Harness owns both the live and frozen repository paths.

@@ -41,7 +41,7 @@ public final class SkillRuntime {
     private final AtomicReference<SkillCatalog> legacyCatalogRef =
             new AtomicReference<>(SkillCatalog.empty());
     private final SkillLoadTool loadTool;
-    private final SkillPromptBuilder promptBuilder;
+    private volatile SkillPromptBuilder promptBuilder;
 
     public SkillRuntime() {
         this(new SkillPromptBuilder());
@@ -143,6 +143,14 @@ public final class SkillRuntime {
         SkillCatalog normalized = catalog != null ? catalog : SkillCatalog.empty();
         legacyCatalogRef.set(normalized);
         install(normalized, legacyContext, toolkit);
+    }
+
+    /**
+     * Replaces the prompt builder used by {@link #renderPrompt}. The load tool instance and any
+     * registered toolkit are unchanged. Null restores the default builder.
+     */
+    public void setPromptBuilder(SkillPromptBuilder promptBuilder) {
+        this.promptBuilder = promptBuilder != null ? promptBuilder : new SkillPromptBuilder();
     }
 
     /** Renders the {@code <available_skills>} block + (when applicable) the code-execution prompt. */
