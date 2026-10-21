@@ -79,6 +79,9 @@ public class DynamicSubagentsMiddleware implements HarnessRuntimeMiddleware {
     private final TaskTool taskTool;
     private final TaskRepository taskRepository;
 
+    /** Optional replacement for the default {@code ## Subagents} section; null keeps the default. */
+    private volatile SubagentSectionRenderer sectionRenderer;
+
     public DynamicSubagentsMiddleware(
             List<SubagentEntry> staticEntries,
             AbstractFilesystem filesystem,
@@ -99,6 +102,17 @@ public class DynamicSubagentsMiddleware implements HarnessRuntimeMiddleware {
                         ? subagentTool
                         : new AgentSpawnTool(agentManager, taskRepository, 0);
         this.taskTool = new TaskTool(taskRepository);
+    }
+
+    /**
+     * Replaces the default {@code ## Subagents} section text; see
+     * {@link SubagentsMiddleware#setSectionRenderer}.
+     *
+     * @return this middleware for chaining
+     */
+    public DynamicSubagentsMiddleware setSectionRenderer(SubagentSectionRenderer renderer) {
+        this.sectionRenderer = renderer;
+        return this;
     }
 
     /**
@@ -157,7 +171,8 @@ public class DynamicSubagentsMiddleware implements HarnessRuntimeMiddleware {
         }
         StringBuilder addition = new StringBuilder();
         if (!merged.isEmpty()) {
-            addition.append(SubagentsMiddleware.renderSubagentSection(merged, false));
+            addition.append(
+                    SubagentsMiddleware.renderSubagentSection(merged, false, sectionRenderer));
         }
         String taskSummary = SubagentsMiddleware.buildTaskSummary(taskRepository, rc);
         if (taskSummary != null) {

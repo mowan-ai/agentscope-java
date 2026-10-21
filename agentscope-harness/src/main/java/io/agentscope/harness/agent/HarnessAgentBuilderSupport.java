@@ -809,17 +809,20 @@ final class HarnessAgentBuilderSupport {
         TaskRepository repo = resolveTaskRepository(b, wsManager);
 
         if (b.externalSubagentTool != null) {
-            return new SubagentsMiddleware(entries, b.externalSubagentTool, repo);
+            return new SubagentsMiddleware(entries, b.externalSubagentTool, repo)
+                    .setSectionRenderer(b.subagentSectionRenderer);
         }
 
         if (b.disableWorkspaceSubagents) {
-            return new SubagentsMiddleware(entries, repo, wsManager);
+            return new SubagentsMiddleware(entries, repo, wsManager)
+                    .setSectionRenderer(b.subagentSectionRenderer);
         }
 
         AbstractFilesystem fs = wsManager.getFilesystem();
         Function<SubagentDeclaration, SubagentFactory> factoryFn =
                 decl -> buildDeclaredFactory(b, decl, workspace, sandboxFs);
-        return new SubagentsMiddleware(entries, repo, wsManager, fs, workspace, factoryFn);
+        return new SubagentsMiddleware(entries, repo, wsManager, fs, workspace, factoryFn)
+                .setSectionRenderer(b.subagentSectionRenderer);
     }
 
     static DynamicSubagentsMiddleware buildDynamicSubagentsMiddleware(
@@ -835,7 +838,14 @@ final class HarnessAgentBuilderSupport {
                 decl -> buildDeclaredFactory(b, decl, workspace, sandboxFs);
         DefaultAgentManager manager = new DefaultAgentManager(staticEntries, wsManager);
         return new DynamicSubagentsMiddleware(
-                staticEntries, fs, workspace, factoryFn, manager, b.externalSubagentTool, repo);
+                        staticEntries,
+                        fs,
+                        workspace,
+                        factoryFn,
+                        manager,
+                        b.externalSubagentTool,
+                        repo)
+                .setSectionRenderer(b.subagentSectionRenderer);
     }
 
     private static TaskRepository resolveTaskRepository(

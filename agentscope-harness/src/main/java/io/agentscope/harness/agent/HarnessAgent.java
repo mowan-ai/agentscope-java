@@ -80,6 +80,7 @@ import io.agentscope.harness.agent.middleware.MemoryFlushMiddleware;
 import io.agentscope.harness.agent.middleware.MemoryMaintenanceMiddleware;
 import io.agentscope.harness.agent.middleware.SandboxLifecycleMiddleware;
 import io.agentscope.harness.agent.middleware.SubagentEntry;
+import io.agentscope.harness.agent.middleware.SubagentSectionRenderer;
 import io.agentscope.harness.agent.middleware.SubagentsMiddleware;
 import io.agentscope.harness.agent.middleware.TeamsMiddleware;
 import io.agentscope.harness.agent.middleware.ToolResultEvictionMiddleware;
@@ -1278,6 +1279,7 @@ public class HarnessAgent implements Agent, AutoCloseable {
         boolean disableWorkspaceContext = false;
         boolean disableAtPathExpansion = false;
         boolean disableSubagents = false;
+        SubagentSectionRenderer subagentSectionRenderer;
         boolean disableDynamicSkills = false;
         boolean disableDefaultWorkspaceSkills = false;
         boolean disableDynamicSubagents = false;
@@ -2325,6 +2327,16 @@ public class HarnessAgent implements Agent, AutoCloseable {
 
         public Builder disableSubagents() {
             this.disableSubagents = true;
+            return this;
+        }
+
+        /**
+         * Replaces the {@code ## Subagents} system-prompt section while keeping the subagent and
+         * task tools. Use this instead of {@link #disableSubagents()} when a deployment needs its
+         * own usage protocol or language. Not inherited by subagents built from this agent.
+         */
+        public Builder subagentSectionRenderer(SubagentSectionRenderer renderer) {
+            this.subagentSectionRenderer = renderer;
             return this;
         }
 

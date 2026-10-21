@@ -194,6 +194,9 @@ public class SubagentsMiddleware implements HarnessRuntimeMiddleware {
      */
     private volatile AgentGenerateTool agentGenerateTool;
 
+    /** Optional replacement for the default {@code ## Subagents} section; null keeps the default. */
+    private volatile SubagentSectionRenderer sectionRenderer;
+
     /**
      * Default mode: creates {@link AgentSpawnTool} + {@link DefaultAgentManager} internally.
      */
@@ -260,6 +263,17 @@ public class SubagentsMiddleware implements HarnessRuntimeMiddleware {
      * @param generator a {@link SubagentSpecGenerator} backed by the model that should author specs
      * @return this middleware for chaining
      */
+    /**
+     * Replaces the default {@code ## Subagents} section text while keeping the subagent and task
+     * tools registered. Passing null restores the default template.
+     *
+     * @return this middleware for chaining
+     */
+    public SubagentsMiddleware setSectionRenderer(SubagentSectionRenderer renderer) {
+        this.sectionRenderer = renderer;
+        return this;
+    }
+
     public SubagentsMiddleware enableAgentGenerateTool(SubagentSpecGenerator generator) {
         if (isSessionMode || agentManager == null) {
             log.debug("enableAgentGenerateTool ignored in session mode (no internal manager)");
@@ -431,7 +445,7 @@ public class SubagentsMiddleware implements HarnessRuntimeMiddleware {
         }
 
         StringBuilder addition = new StringBuilder();
-        addition.append(renderSubagentSection(currentEntries, isSessionMode));
+        addition.append(renderSubagentSection(currentEntries, isSessionMode, sectionRenderer));
         String taskSummary = buildTaskSummary(this.taskRepository, rc);
         if (taskSummary != null) {
             addition.append(taskSummary);
@@ -651,15 +665,32 @@ public class SubagentsMiddleware implements HarnessRuntimeMiddleware {
      * without a declaration ({@code entry.declaration() == null}) are always shown.
      */
     public static String renderSubagentSection(List<SubagentEntry> entries, boolean isSessionMode) {
+        return renderSubagentSection(entries, isSessionMode, null);
+    }
+
+    /**
+     * Renders the section with a custom renderer when one is configured, otherwise with the
+     * default template. The renderer receives only entries visible to the LLM.
+     */
+    public static String renderSubagentSection(
+            List<SubagentEntry> entries, boolean isSessionMode, SubagentSectionRenderer renderer) {
+        if (renderer != null) {
+            String rendered = renderer.render(visibleEntries(entries), isSessionMode);
+            return rendered != null ? rendered : "";
+        }
         String agentList =
-                entries.stream()
-                        .filter(SubagentsMiddleware::isVisibleToLlm)
+                visibleEntries(entries).stream()
                         .map(e -> String.format("- `%s`: %s", e.name(), e.description()))
                         .collect(Collectors.joining("\n"));
         String spawnName = isSessionMode ? "sessions_spawn" : "agent_spawn";
         String sendName = isSessionMode ? "sessions_send" : "agent_send";
         String listName = isSessionMode ? "sessions_list" : "agent_list";
         return String.format(SUBAGENT_SECTION_TEMPLATE, spawnName, sendName, listName, agentList);
+    }
+
+    /** Entries the LLM may see and spawn, in registration order. */
+    public static List<SubagentEntry> visibleEntries(List<SubagentEntry> entries) {
+        return entries.stream().filter(SubagentsMiddleware::isVisibleToLlm).toList();
     }
 
     /**
